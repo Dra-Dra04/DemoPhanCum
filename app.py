@@ -48,7 +48,7 @@ def load_data_from_sql():
 st.set_page_config(page_title="Customer Segmentation Tool", layout="wide")
 st.title(" Định hướng Marketing dựa trên lịch sử vận chuyển bằng phương pháp phân cụm với thuật toán K-Means ")
 
-# --- SIDEBAR: CHỨA TOÀN BỘ CẤU HÌNH ---
+# --- SIDEBAR---
 with st.sidebar:
     st.header("1. Dữ liệu nguồn")
     if st.button(" Tải dữ liệu từ SQL", type="primary"):
@@ -76,7 +76,7 @@ with st.sidebar:
         # Chọn K
         k_num = st.slider("Số lượng cụm (K)", 2, 8, 4)
 
-        # Chọn thuộc tính (Đưa vào Sidebar luôn cho gọn)
+        # Chọn thuộc tính
         df = st.session_state.df_sql
         all_numeric_cols = [c for c in df.columns if
                             c not in ['C_ID', 'Cluster'] and pd.api.types.is_numeric_dtype(df[c])]
@@ -164,7 +164,7 @@ if 'clustered_df' in st.session_state:
     st.divider()
 
     # ---  DANH SÁCH CHI TIẾT ---
-    st.subheader("II. Danh sách chi tiết từng nhóm")
+    st.subheader("Danh sách chi tiết từng nhóm")
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c1:

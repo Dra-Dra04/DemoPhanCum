@@ -22,7 +22,7 @@ DB_TABLE = 'FactCustomerBehavior'
 # ==========================================
 @st.cache_data(ttl=600)
 def load_data_from_sql():
-    """Kết nối và lấy dữ liệu đã làm sạch từ SQL Server."""
+    """Kết nối và lấy dữ liệu từ SQL Server."""
     try:
         # Tạo chuỗi kết nối an toàn
         params = urllib.parse.quote_plus(
@@ -42,108 +42,155 @@ def load_data_from_sql():
         return None, str(e)
 
 
+def preprocess_df(df):
+    """Tiền xử lý chung cho cả CSV và SQL"""
+    # 1. Tìm cột ID (nếu có) để không dùng phân cụm
+    id_col = None
+    candidates = ["C_ID", "customer_id", "id", "ID", "CustomerID"]
+    for c in candidates:
+        if c in df.columns:
+            id_col = c
+            break
+
+    # 2. Lọc các cột số
+    numeric_cols = [c for c in df.columns if c != id_col and pd.api.types.is_numeric_dtype(df[c])]
+
+    # 3. Xử lý NaN
+    df_clean = df.copy()
+    for col in numeric_cols:
+        if df_clean[col].isnull().sum() > 0:
+            df_clean[col] = df_clean[col].fillna(df_clean[col].median())
+
+    return df_clean, id_col, numeric_cols
+
+
 # ==========================================
 # 3. GIAO DIỆN STREAMLIT
 # ==========================================
 st.set_page_config(page_title="Customer Segmentation Tool", layout="wide")
-st.title(" Định hướng Marketing dựa trên lịch sử vận chuyển bằng phương pháp phân cụm với thuật toán K-Means ")
+st.title(" Định hướng Marketing dựa trên lịch sử vận chuyển bằng phương pháp phân cụm")
 
-# --- SIDEBAR---
+# --- SIDEBAR: ĐIỀU KHIỂN ---
 with st.sidebar:
-    st.header("1. Dữ liệu nguồn")
-    if st.button(" Tải dữ liệu từ SQL", type="primary"):
-        st.session_state.load_trigger = True
+    st.header("Nguồn dữ liệu")
 
-    # Logic tải dữ liệu
-    if 'df_sql' not in st.session_state:
-        st.session_state.df_sql = None
+    # TÙY CHỌN: SQL HAY CSV?
+    data_source = st.radio("Chọn nguồn dữ liệu:", (" SQL Server", " Upload File CSV"))
 
-    if st.session_state.get('load_trigger'):
-        with st.spinner("Đang kết nối SQL Server..."):
-            df_result, error = load_data_from_sql()
-            if error:
-                st.error(f"Lỗi: {error}")
-            else:
-                st.session_state.df_sql = df_result
-                st.success(f"Đã tải {len(df_result)} khách hàng.")
-                st.session_state.load_trigger = False
+    # LOGIC LOAD DỮ LIỆU
+    if 'df_loaded' not in st.session_state:
+        st.session_state.df_loaded = None
 
-    # Chỉ hiện cấu hình phân cụm khi đã có dữ liệu
-    if st.session_state.df_sql is not None:
+    # === TRƯỜNG HỢP 1: SQL SERVER ===
+    if data_source == " SQL Server":
+        if st.button("Kết nối & Tải dữ liệu", type="primary"):
+            with st.spinner("Đang kết nối SQL Server..."):
+                df_result, error = load_data_from_sql()
+                if error:
+                    st.error(f"Lỗi SQL: {error}")
+                else:
+                    st.session_state.df_loaded = df_result
+                    st.success(f"Đã tải {len(df_result)} dòng từ SQL.")
+
+    # === TRƯỜNG HỢP 2: CSV FILE ===
+    else:
+        uploaded_file = st.file_uploader("Chọn file CSV", type=["csv"])
+        if uploaded_file is not None:
+            # Đọc file ngay khi upload
+            try:
+                df_csv = pd.read_csv(uploaded_file)
+                st.session_state.df_loaded = df_csv
+                st.success(f"Đã đọc file CSV: {len(df_csv)} dòng.")
+            except Exception as e:
+                st.error(f"Lỗi đọc file: {e}")
+
+    # CHỈ HIỆN CẤU HÌNH KHI ĐÃ CÓ DATA
+    if st.session_state.df_loaded is not None:
         st.divider()
-        st.header("2. Cấu hình K-Means")
+        st.header(" Cấu hình K-Means")
+
+        # Tiền xử lý sơ bộ để lấy danh sách cột
+        df_raw = st.session_state.df_loaded
+        _, id_col_detect, all_numeric = preprocess_df(df_raw)
 
         # Chọn K
-        k_num = st.slider("Số lượng cụm (K)", 2, 8, 4)
+        k_num = st.slider("Số lượng cụm (K)", 2, 10, 4)
 
-        # Chọn thuộc tính
-        df = st.session_state.df_sql
-        all_numeric_cols = [c for c in df.columns if
-                            c not in ['C_ID', 'Cluster'] and pd.api.types.is_numeric_dtype(df[c])]
-
+        # Chọn Features
         st.write("**Chọn thuộc tính phân tích:**")
         selected_features = st.multiselect(
             "Features",
-            options=all_numeric_cols,
-            default=all_numeric_cols,
+            options=all_numeric,
+            default=all_numeric[:5] if len(all_numeric) > 5 else all_numeric,
             label_visibility="collapsed"
         )
 
         st.divider()
-        # Nút chạy nằm cuối Sidebar
         run_btn = st.button(" Tiến hành Phân cụm", type="primary")
 
 # --- MÀN HÌNH CHÍNH ---
 
-# 1. Kiểm tra dữ liệu
-if st.session_state.df_sql is None:
+# Kiểm tra dữ liệu
+if st.session_state.df_loaded is None:
+    if data_source == " SQL Server":
+        st.info(" Bấm nút **'Kết nối & Tải dữ liệu'** bên trái để bắt đầu.")
+    else:
+        st.info(" Vui lòng **Upload file CSV** bên trái để bắt đầu.")
     st.stop()
 
-# 2. Xử lý thuật toán khi bấm nút
+# Xử lý Logic Phân Cụm
 if 'run_btn' in locals() and run_btn:
     if not selected_features:
         st.error("Vui lòng chọn ít nhất 1 thuộc tính!")
     else:
-        with st.spinner("Đang chạy thuật toán AI..."):
-            df = st.session_state.df_sql
-            # Prepare Data
-            X = df[selected_features].values
+        with st.spinner("Đang xử lý dữ liệu & chạy AI..."):
+            # 1. Lấy dữ liệu & Xử lý NaN
+            df_work, id_col, _ = preprocess_df(st.session_state.df_loaded)
+
+            # 2. Chuẩn hóa
+            X = df_work[selected_features].values
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X)
 
-            # Run KMeans
+            # 3. K-Means
             kmeans = KMeans(n_clusters=k_num, random_state=42, n_init="auto")
             labels = kmeans.fit_predict(X_scaled)
 
-            # Save Result to Session State
-            df_out = df.copy()
+            # 4. Lưu kết quả
+            df_out = df_work.copy()
             df_out['Cluster'] = labels.astype(str)
 
             st.session_state.clustered_df = df_out
             st.session_state.features = selected_features
-            st.rerun()  # Load lại trang để hiển thị kết quả
+            st.session_state.id_col = id_col
+            st.rerun()
 
-# 3. Hiển thị kết quả
+# Hiển thị kết quả (Dashboard)
 if 'clustered_df' in st.session_state:
     df_out = st.session_state.clustered_df
     feats = st.session_state.features
+    id_c = st.session_state.id_col
 
-    # --- PHẦN A: DASHBOARD TỔNG QUAN ---
+    # Cột ID để hiển thị (Nếu không tìm thấy ID thì dùng index)
+    id_show = [id_c] if id_c else []
+
+    # --- PHẦN I: DASHBOARD ---
     st.subheader(" Tổng quan phân cụm")
-
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.write("**Bản đồ phân bố (PCA 2D)**")
+        # PCA
         pca = PCA(n_components=2)
-        components = pca.fit_transform(StandardScaler().fit_transform(df_out[feats]))
+        X_pca = StandardScaler().fit_transform(df_out[feats])
+        components = pca.fit_transform(X_pca)
         df_out['PCA1'] = components[:, 0]
         df_out['PCA2'] = components[:, 1]
 
         fig = px.scatter(
             df_out, x='PCA1', y='PCA2', color='Cluster',
-            hover_data=['C_ID'] + feats[:3],
-            title=f"Phân bố {len(df_out['Cluster'].unique())} nhóm khách hàng"
+            hover_data=id_show + feats[:3],
+            title=f"Phân bố {len(df_out['Cluster'].unique())} cụm khách hàng"
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -163,30 +210,28 @@ if 'clustered_df' in st.session_state:
 
     st.divider()
 
-    # ---  DANH SÁCH CHI TIẾT ---
+    # --- PHẦN II: CHI TIẾT ---
     st.subheader("Danh sách chi tiết từng nhóm")
 
-    c1, c2, c3 = st.columns([1, 2, 1])
+    c1, c2 = st.columns([1, 3])
     with c1:
-        # Bộ lọc
         unique_clusters = sorted(df_out['Cluster'].unique())
-        cluster_select = st.selectbox("Chọn cụm (Cluster) để xem:", ["Tất cả"] + list(unique_clusters))
+        cluster_select = st.selectbox("Chọn cụm (Cluster):", ["Tất cả"] + list(unique_clusters))
 
-    # Logic lọc
     if cluster_select != "Tất cả":
         display_df = df_out[df_out['Cluster'] == cluster_select]
     else:
         display_df = df_out
 
-    # Hiển thị bảng
-    show_cols = ['C_ID', 'Cluster'] + feats
+    show_cols = id_show + ['Cluster'] + feats
+    show_cols = [c for c in show_cols if c in display_df.columns]
+
     st.dataframe(display_df[show_cols], use_container_width=True, height=400)
 
-    # Nút Download
     csv = display_df[show_cols].to_csv(index=False).encode('utf-8')
     st.download_button(
-        label=f"Tải danh sách ({len(display_df)} khách hàng)",
+        label="Tải danh sách (CSV)",
         data=csv,
-        file_name=f"Danh_sach_Cluster_{cluster_select}.csv",
+        file_name=f"List_Cluster_{cluster_select}.csv",
         mime="text/csv",
     )
